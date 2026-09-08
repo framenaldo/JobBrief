@@ -521,12 +521,27 @@
 // FIREBASE CONFIG — paste the SAME config you used in job-brief-board.html
 // ===================================================================
 var firebaseConfig = {
-  apiKey: "REPLACE_WITH_YOUR_API_KEY",
-  authDomain: "REPLACE_WITH_YOUR_PROJECT.firebaseapp.com",
-  projectId: "REPLACE_WITH_YOUR_PROJECT_ID",
-  storageBucket: "REPLACE_WITH_YOUR_PROJECT.appspot.com",
-  messagingSenderId: "REPLACE_WITH_YOUR_SENDER_ID",
-  appId: "REPLACE_WITH_YOUR_APP_ID"
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyAbGcdF2AchxuisAiZfmoRBMPnB0D9AAF0",
+  authDomain: "job-1-5428a.firebaseapp.com",
+  projectId: "job-1-5428a",
+  storageBucket: "job-1-5428a.firebasestorage.app",
+  messagingSenderId: "829325361176",
+  appId: "1:829325361176:web:10d80cd95f5665f173436d",
+  measurementId: "G-4B7NBRJPES"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
 };
 // ===================================================================
 
