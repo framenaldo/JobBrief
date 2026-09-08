@@ -805,10 +805,17 @@ async function init(){
   window.__appInitialized = true;
   setMinDateToday();
   wireEvents();
+  var submitBtn = document.getElementById('submitBtn');
+  submitBtn.disabled = true;
+  submitBtn.querySelector('span').textContent = 'กำลังเชื่อมต่อระบบ...';
   await initFirebase();
   if(firebaseReady){
+    submitBtn.disabled = false;
+    submitBtn.querySelector('span').textContent = 'เพิ่มงาน';
     refreshWoPreview();
     startListener();
+  } else {
+    submitBtn.querySelector('span').textContent = 'เชื่อมต่อไม่สำเร็จ (ดูข้อความด้านบน)';
   }
 }
 init();
