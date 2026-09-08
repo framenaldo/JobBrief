@@ -613,6 +613,11 @@ async function refreshWoPreview(){
     if(el) el.textContent = '#' + pad4(current + 1);
   }catch(e){ /* non-critical */ }
 }
+function parseLinks(text){
+  return (text||'').split('\n').map(function(s){ return s.trim(); }).filter(function(s){ return s.length>0; }).map(function(s){
+    return /^https?:\/\//i.test(s) ? s : 'https://' + s;
+  });
+}
 function fieldsFromForm(fd){
   var productionType = fd.get('productionType') === 'other' ? (fd.get('productionTypeOther')||'อื่นๆ') : fd.get('productionType');
   return {
@@ -625,8 +630,9 @@ function fieldsFromForm(fd){
   };
 }
 
-// ---------- finished-work photos ----------
-var MAX_PHOTOS_TOTAL_CHARS = 650 * 1024; // keep well under Firestore's 1MiB per-document limit
+// ---------- finished-work files (photos or documents like PDF) ----------
+var MAX_PHOTOS_TOTAL_CHARS = 900 * 1024; // keep well under Firestore's 1MiB per-document limit
+var MAX_NONIMAGE_RAW_BYTES = 600 * 1024; // non-image files (e.g. PDF) can't be compressed, so cap raw size
 var editPendingPhotos = [];
 
 function compressImage(file, maxWidth, quality){
@@ -651,17 +657,41 @@ function compressImage(file, maxWidth, quality){
     reader.readAsDataURL(file);
   });
 }
+function readAsDataURL(file){
+  return new Promise(function(resolve, reject){
+    var reader = new FileReader();
+    reader.onload = function(e){ resolve(e.target.result); };
+    reader.onerror = function(){ reject(new Error('read failed')); };
+    reader.readAsDataURL(file);
+  });
+}
 function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return Math.round(b/1024)+' KB'; return (b/1024/1024).toFixed(1)+' MB'; }
+function fileExtOf(name){ var m = name.match(/\.([^.]+)$/); return m ? m[1].toUpperCase() : 'FILE'; }
 
 async function handleEditPhotoFiles(fileList){
   var files = Array.prototype.slice.call(fileList);
   for(var i=0;i<files.length;i++){
     var file = files[i];
+    var isImage = file.type.indexOf('image/') === 0;
     try{
-      var dataUrl = await compressImage(file);
-      editPendingPhotos.push({ name:file.name, dataUrl:dataUrl });
+      var dataUrl;
+      if(isImage){
+        dataUrl = await compressImage(file);
+      } else {
+        if(file.size > MAX_NONIMAGE_RAW_BYTES){
+          showToast('ไฟล์ "'+file.name+'" ใหญ่เกิน '+humanSize(MAX_NONIMAGE_RAW_BYTES)+' (ไฟล์ที่ไม่ใช่รูปบีบอัดไม่ได้)', 'warn');
+          continue;
+        }
+        dataUrl = await readAsDataURL(file);
+      }
+      var currentTotal = editPendingPhotos.reduce(function(s,f){ return s+f.dataUrl.length; }, 0);
+      if(currentTotal + dataUrl.length > MAX_PHOTOS_TOTAL_CHARS){
+        showToast('ไฟล์รวมกันจะใหญ่เกินไป กรุณาลบไฟล์เดิมบางไฟล์ก่อนเพิ่ม "'+file.name+'"', 'warn');
+        continue;
+      }
+      editPendingPhotos.push({ name:file.name, dataUrl:dataUrl, isImage:isImage });
     }catch(err){
-      showToast('อ่านรูป "'+file.name+'" ไม่สำเร็จ', 'warn');
+      showToast('อ่านไฟล์ "'+file.name+'" ไม่สำเร็จ', 'warn');
     }
   }
   renderEditPhotoPreview();
@@ -670,8 +700,13 @@ function renderEditPhotoPreview(){
   var container = document.getElementById('editPhotoPreview');
   if(!container) return;
   container.innerHTML = editPendingPhotos.map(function(f, i){
+    if(f.isImage === false){
+      return '<div class="file-chip"><span class="chip-ext">'+escapeHtml(fileExtOf(f.name))+'</span>'+
+        '<span class="chip-name">'+escapeHtml(f.name)+'</span>'+
+        '<button type="button" class="chip-remove" data-photo-idx="'+i+'" aria-label="ลบไฟล์">×</button></div>';
+    }
     return '<div class="file-chip file-chip--image"><img src="'+f.dataUrl+'" alt="'+escapeHtml(f.name)+'" />'+
-      '<button type="button" class="chip-remove" data-photo-idx="'+i+'" aria-label="ลบรูป">×</button></div>';
+      '<button type="button" class="chip-remove" data-photo-idx="'+i+'" aria-label="ลบไฟล์">×</button></div>';
   }).join('');
   var meter = document.getElementById('editPhotoMeter');
   if(meter){
@@ -797,11 +832,12 @@ function openEditModal(id){
         '<label class="field"><span>เวลา <em>*</em></span><input type="time" name="dueTime" value="'+job.dueTime+'" required /></label>'+
       '</div>'+
       '<label class="field"><span>หมายเหตุ</span><textarea name="notes" rows="2">'+escapeHtml(job.notes||'')+'</textarea></label>'+
-      '<label class="field"><span>รูปงานที่เสร็จแล้ว (ถ้ามี)</span></label>'+
+      '<label class="field"><span>ไฟล์งานที่เสร็จแล้ว (ถ้ามี)</span></label>'+
       '<div class="file-preview" id="editPhotoPreview"></div>'+
-      '<button type="button" class="upload-zone" id="editPhotoZone"><span class="upload-icon" aria-hidden="true">🏆</span><span><strong>เพิ่มรูปงานที่เสร็จแล้ว</strong></span></button>'+
-      '<input type="file" id="editPhotoInput" accept="image/*" multiple hidden />'+
+      '<button type="button" class="upload-zone" id="editPhotoZone"><span class="upload-icon" aria-hidden="true">🏆</span><span><strong>เพิ่มไฟล์งานที่เสร็จแล้ว</strong></span><span class="upload-hint">รูปภาพ หรือ PDF</span></button>'+
+      '<input type="file" id="editPhotoInput" accept="image/*,.pdf" multiple hidden />'+
       '<p class="size-meter" id="editPhotoMeter"></p>'+
+      '<label class="field"><span>หรือวางลิงก์ไฟล์ (ถ้าไฟล์ใหญ่เกินอัปโหลดตรง)</span><textarea name="finishedFileLinks" rows="2" placeholder="วางลิงก์ Google Drive หรือที่เก็บไฟล์อื่น ๆ ทีละบรรทัด — ไม่จำกัดขนาดไฟล์">'+escapeHtml((job.finishedFileLinks||[]).join('\n'))+'</textarea></label>'+
       '<button type="submit" class="submit-btn"><span>บันทึก</span></button>'+
     '</form>';
   var modal = document.getElementById('modalContent');
@@ -829,6 +865,7 @@ function openEditModal(id){
     }
     var fields = fieldsFromForm(new FormData(e.target));
     fields.finishedPhotos = editPendingPhotos;
+    fields.finishedFileLinks = parseLinks(new FormData(e.target).get('finishedFileLinks'));
     try{
       await updateDoc(doc(db, 'jobs', job.id), fields);
       showToast('บันทึกการแก้ไขแล้ว', 'success');

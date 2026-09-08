@@ -380,6 +380,11 @@
     position:absolute; bottom:6px; right:6px; background:rgba(33,29,26,.72); color:#fff;
     font-size:11px; padding:3px 8px; border-radius:999px; font-family:var(--font-display); font-weight:600;
   }
+  .card-file-btn{
+    display:block; width:100%; text-align:left; border:1.5px dashed var(--ticket-line); background:var(--white);
+    padding:10px 12px; border-radius:var(--radius-sm); cursor:pointer; margin-bottom:12px;
+    font-size:12.5px; font-weight:600; color:var(--brass-dark);
+  }
   .lightbox-images{display:flex; flex-direction:column; gap:12px;}
   .lightbox-images img{width:100%; border-radius:10px; display:block;}
   .lightbox-download{
@@ -517,6 +522,7 @@ async function initFirebase(){
 function escapeHtml(str){ var d = document.createElement('div'); d.textContent = str == null ? '' : String(str); return d.innerHTML; }
 function escapeAttr(str){ return escapeHtml(str).replace(/"/g,'&quot;'); }
 function pad4(n){ return String(n).padStart(4,'0'); }
+function fileExtOf(name){ var m = name.match(/\.([^.]+)$/); return m ? m[1].toUpperCase() : 'FILE'; }
 function formatThaiDate(dateStr){
   var d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('th-TH', {day:'numeric', month:'short', year:'numeric'});
@@ -538,10 +544,16 @@ function sortedJobs(list){
 function boardCardHtml(j){
   var s = statusInfo(j.status);
   var photos = j.finishedPhotos || [];
-  var photoBtn = photos.length ?
-    '<button type="button" class="card-photo-btn" data-photos-id="'+j.id+'"><img src="'+photos[0].dataUrl+'" alt="" />'+
-      (photos.length > 1 ? '<span class="card-photo-badge">📷 '+photos.length+'</span>' : '<span class="card-photo-badge">📷</span>')+
-    '</button>' : '';
+  var links = j.finishedFileLinks || [];
+  var totalCount = photos.length + links.length;
+  var photoBtn = '';
+  if(photos.length && photos[0].isImage !== false){
+    photoBtn = '<button type="button" class="card-photo-btn" data-photos-id="'+j.id+'"><img src="'+photos[0].dataUrl+'" alt="" />'+
+      (totalCount > 1 ? '<span class="card-photo-badge">📎 '+totalCount+'</span>' : '<span class="card-photo-badge">📎</span>')+
+    '</button>';
+  } else if(totalCount){
+    photoBtn = '<button type="button" class="card-file-btn" data-photos-id="'+j.id+'">📎 ไฟล์แนบ '+totalCount+' ไฟล์ — กดดู</button>';
+  }
   return '<div class="board-card">'+
     '<div class="board-card-head"><span class="ticket-no">#'+pad4(j.woNumber)+'</span></div>'+
     photoBtn+
@@ -553,22 +565,121 @@ function boardCardHtml(j){
     '</div>'+
   '</div>';
 }
+// ---------- zip export (pure JS, no external library — store/no-compression method) ----------
+function crc32(bytes){
+  if(!crc32.table){
+    var table = [];
+    for(var n=0;n<256;n++){ var c=n; for(var k=0;k<8;k++){ c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); } table[n]=c>>>0; }
+    crc32.table = table;
+  }
+  var crc = 0xFFFFFFFF;
+  for(var i=0;i<bytes.length;i++){ crc = crc32.table[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8); }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+function dataUrlToBytes(dataUrl){
+  var base64 = dataUrl.split(',')[1] || '';
+  var binary = atob(base64);
+  var arr = new Uint8Array(binary.length);
+  for(var i=0;i<binary.length;i++){ arr[i] = binary.charCodeAt(i); }
+  return arr;
+}
+function strToUtf8Bytes(str){
+  var utf8 = unescape(encodeURIComponent(str));
+  var arr = new Uint8Array(utf8.length);
+  for(var i=0;i<utf8.length;i++){ arr[i] = utf8.charCodeAt(i); }
+  return arr;
+}
+function makeZip(entries){
+  var localParts = [], centralParts = [], offset = 0;
+  entries.forEach(function(f){
+    var nameBytes = strToUtf8Bytes(f.name);
+    var crc = crc32(f.data);
+    var size = f.data.length;
+    var lh = new Uint8Array(30 + nameBytes.length);
+    var ldv = new DataView(lh.buffer);
+    ldv.setUint32(0, 0x04034b50, true); ldv.setUint16(4, 20, true); ldv.setUint16(6, 0, true);
+    ldv.setUint16(8, 0, true); ldv.setUint16(10, 0, true); ldv.setUint16(12, 0x21, true);
+    ldv.setUint32(14, crc, true); ldv.setUint32(18, size, true); ldv.setUint32(22, size, true);
+    ldv.setUint16(26, nameBytes.length, true); ldv.setUint16(28, 0, true);
+    lh.set(nameBytes, 30);
+    localParts.push(lh, f.data);
+    var ch = new Uint8Array(46 + nameBytes.length);
+    var cdv = new DataView(ch.buffer);
+    cdv.setUint32(0, 0x02014b50, true); cdv.setUint16(4, 20, true); cdv.setUint16(6, 20, true);
+    cdv.setUint16(8, 0, true); cdv.setUint16(10, 0, true); cdv.setUint16(12, 0, true); cdv.setUint16(14, 0x21, true);
+    cdv.setUint32(16, crc, true); cdv.setUint32(20, size, true); cdv.setUint32(24, size, true);
+    cdv.setUint16(28, nameBytes.length, true); cdv.setUint16(30, 0, true); cdv.setUint16(32, 0, true);
+    cdv.setUint16(34, 0, true); cdv.setUint16(36, 0, true); cdv.setUint32(38, 0, true); cdv.setUint32(42, offset, true);
+    ch.set(nameBytes, 46);
+    centralParts.push(ch);
+    offset += lh.length + f.data.length;
+  });
+  var centralSize = centralParts.reduce(function(s,p){return s+p.length;}, 0);
+  var centralOffset = offset;
+  var eocd = new Uint8Array(22);
+  var edv = new DataView(eocd.buffer);
+  edv.setUint32(0, 0x06054b50, true); edv.setUint16(4,0,true); edv.setUint16(6,0,true);
+  edv.setUint16(8, entries.length, true); edv.setUint16(10, entries.length, true);
+  edv.setUint32(12, centralSize, true); edv.setUint32(16, centralOffset, true); edv.setUint16(20,0,true);
+  var allParts = localParts.concat(centralParts, [eocd]);
+  var total = allParts.reduce(function(s,p){return s+p.length;}, 0);
+  var out = new Uint8Array(total);
+  var pos = 0;
+  allParts.forEach(function(p){ out.set(p, pos); pos += p.length; });
+  return out;
+}
+function uniqueFileName(name, used){
+  var base = name, ext = '';
+  var m = name.match(/^(.*)(\.[^.]+)$/);
+  if(m){ base = m[1]; ext = m[2]; }
+  var candidate = name, i = 1;
+  while(used[candidate]){ candidate = base+' ('+i+')'+ext; i++; }
+  used[candidate] = true;
+  return candidate;
+}
+function downloadJobFilesAsZip(job){
+  var files = job.finishedPhotos || [];
+  if(!files.length) return;
+  var used = {};
+  var entries = files.map(function(f){ return { name: uniqueFileName(f.name, used), data: dataUrlToBytes(f.dataUrl) }; });
+  var zipBytes = makeZip(entries);
+  var blob = new Blob([zipBytes], { type:'application/zip' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'WO-'+pad4(job.woNumber)+'-'+(job.customerName||'files').replace(/[\\/:*?"<>|]/g,'-')+'.zip';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+}
+
 function openPhotoModal(id){
   var job = currentJobsCache.filter(function(j){ return j.id === id; })[0];
-  if(!job || !job.finishedPhotos || !job.finishedPhotos.length) return;
+  if(!job) return;
+  var files = job.finishedPhotos || [];
+  var links = job.finishedFileLinks || [];
+  if(!files.length && !links.length) return;
   var html = '<button class="modal-close" id="modalClose" type="button" aria-label="ปิด">×</button>'+
-    '<h2>รูปงานที่เสร็จแล้ว</h2>'+
+    '<h2>ไฟล์งานที่เสร็จแล้ว</h2>'+
     '<p style="color:var(--ink-faint); font-size:13px; margin-top:-10px;">WO-'+pad4(job.woNumber)+' · '+escapeHtml(job.customerName)+'</p>'+
+    (files.length > 1 ? '<button type="button" id="downloadAllBtn" class="link-btn" style="display:block; margin-bottom:14px;">⬇️ ดาวน์โหลดไฟล์แนบทั้งหมด (.zip)</button>' : '')+
     '<div class="lightbox-images">'+
-      job.finishedPhotos.map(function(f){
+      files.map(function(f){
+        if(f.isImage === false){
+          return '<a href="'+f.dataUrl+'" download="'+escapeAttr(f.name)+'" class="file-chip"><span class="chip-ext">'+escapeHtml(fileExtOf(f.name))+'</span><span class="chip-name">'+escapeHtml(f.name)+'</span></a>';
+        }
         return '<div><img src="'+f.dataUrl+'" alt="'+escapeAttr(f.name)+'" />'+
           '<a class="lightbox-download" href="'+f.dataUrl+'" download="'+escapeAttr(f.name)+'">⬇️ ดาวน์โหลดรูปนี้</a></div>';
+      }).join('')+
+      links.map(function(url){
+        return '<a href="'+escapeAttr(url)+'" target="_blank" rel="noopener noreferrer" class="file-chip file-chip--link"><span class="chip-ext">LINK</span><span class="chip-name">'+escapeHtml(url)+'</span></a>';
       }).join('')+
     '</div>';
   var modal = document.getElementById('modalContent');
   modal.innerHTML = html;
   document.getElementById('modalOverlay').hidden = false;
   document.getElementById('modalClose').onclick = closeModal;
+  var zipBtn = document.getElementById('downloadAllBtn');
+  if(zipBtn) zipBtn.onclick = function(){ downloadJobFilesAsZip(job); };
 }
 function closeModal(){ document.getElementById('modalOverlay').hidden = true; }
 function renderBoard(){
