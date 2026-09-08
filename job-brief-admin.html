@@ -624,6 +624,61 @@ function fieldsFromForm(fd){
     notes: (fd.get('notes')||'').trim()
   };
 }
+
+// ---------- finished-work photos ----------
+var MAX_PHOTOS_TOTAL_CHARS = 650 * 1024; // keep well under Firestore's 1MiB per-document limit
+var editPendingPhotos = [];
+
+function compressImage(file, maxWidth, quality){
+  maxWidth = maxWidth || 1000; quality = quality || 0.72;
+  return new Promise(function(resolve, reject){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      var img = new Image();
+      img.onload = function(){
+        var w = img.width, h = img.height;
+        if(w > maxWidth){ h = Math.round(h * maxWidth / w); w = maxWidth; }
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = function(){ reject(new Error('decode failed')); };
+      img.src = e.target.result;
+    };
+    reader.onerror = function(){ reject(new Error('read failed')); };
+    reader.readAsDataURL(file);
+  });
+}
+function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return Math.round(b/1024)+' KB'; return (b/1024/1024).toFixed(1)+' MB'; }
+
+async function handleEditPhotoFiles(fileList){
+  var files = Array.prototype.slice.call(fileList);
+  for(var i=0;i<files.length;i++){
+    var file = files[i];
+    try{
+      var dataUrl = await compressImage(file);
+      editPendingPhotos.push({ name:file.name, dataUrl:dataUrl });
+    }catch(err){
+      showToast('อ่านรูป "'+file.name+'" ไม่สำเร็จ', 'warn');
+    }
+  }
+  renderEditPhotoPreview();
+}
+function renderEditPhotoPreview(){
+  var container = document.getElementById('editPhotoPreview');
+  if(!container) return;
+  container.innerHTML = editPendingPhotos.map(function(f, i){
+    return '<div class="file-chip file-chip--image"><img src="'+f.dataUrl+'" alt="'+escapeHtml(f.name)+'" />'+
+      '<button type="button" class="chip-remove" data-photo-idx="'+i+'" aria-label="ลบรูป">×</button></div>';
+  }).join('');
+  var meter = document.getElementById('editPhotoMeter');
+  if(meter){
+    var totalChars = editPendingPhotos.reduce(function(s,f){ return s+f.dataUrl.length; }, 0);
+    meter.textContent = totalChars > 0 ? ('ขนาดรวม: ' + humanSize(Math.round(totalChars*0.75))) : '';
+  }
+}
 async function submitForm(e){
   e.preventDefault();
   var form = e.target;
@@ -721,6 +776,7 @@ async function deleteJob(id){
 function openEditModal(id){
   var job = currentJobsCache.filter(function(j){ return j.id === id; })[0];
   if(!job) return;
+  editPendingPhotos = (job.finishedPhotos || []).slice();
   var presetTypes = ['เลเซอร์ 2D','Engrave','UV','Screen'];
   var isPreset = presetTypes.indexOf(job.productionType) > -1;
   var html = '<button class="modal-close" id="modalClose" type="button" aria-label="ปิด">×</button>'+
@@ -741,6 +797,11 @@ function openEditModal(id){
         '<label class="field"><span>เวลา <em>*</em></span><input type="time" name="dueTime" value="'+job.dueTime+'" required /></label>'+
       '</div>'+
       '<label class="field"><span>หมายเหตุ</span><textarea name="notes" rows="2">'+escapeHtml(job.notes||'')+'</textarea></label>'+
+      '<label class="field"><span>รูปงานที่เสร็จแล้ว (ถ้ามี)</span></label>'+
+      '<div class="file-preview" id="editPhotoPreview"></div>'+
+      '<button type="button" class="upload-zone" id="editPhotoZone"><span class="upload-icon" aria-hidden="true">🏆</span><span><strong>เพิ่มรูปงานที่เสร็จแล้ว</strong></span></button>'+
+      '<input type="file" id="editPhotoInput" accept="image/*" multiple hidden />'+
+      '<p class="size-meter" id="editPhotoMeter"></p>'+
       '<button type="submit" class="submit-btn"><span>บันทึก</span></button>'+
     '</form>';
   var modal = document.getElementById('modalContent');
@@ -751,10 +812,23 @@ function openEditModal(id){
   typeSelect.addEventListener('change', function(e){
     document.getElementById('editOtherTypeField').hidden = e.target.value !== 'other';
   });
+  renderEditPhotoPreview();
+  document.getElementById('editPhotoZone').addEventListener('click', function(){
+    document.getElementById('editPhotoInput').click();
+  });
+  document.getElementById('editPhotoInput').addEventListener('change', function(e){
+    handleEditPhotoFiles(e.target.files); e.target.value = '';
+  });
   document.getElementById('editForm').addEventListener('submit', async function(e){
     e.preventDefault();
     if(!e.target.checkValidity()){ e.target.reportValidity(); return; }
+    var totalChars = editPendingPhotos.reduce(function(s,f){ return s+f.dataUrl.length; }, 0);
+    if(totalChars > MAX_PHOTOS_TOTAL_CHARS){
+      showToast('รูปงานรวมกันใหญ่เกินไป กรุณาลบบางรูปออกก่อนบันทึก', 'error');
+      return;
+    }
     var fields = fieldsFromForm(new FormData(e.target));
+    fields.finishedPhotos = editPendingPhotos;
     try{
       await updateDoc(doc(db, 'jobs', job.id), fields);
       showToast('บันทึกการแก้ไขแล้ว', 'success');
@@ -794,6 +868,8 @@ function wireEvents(){
     if(editBtn){ openEditModal(editBtn.getAttribute('data-edit')); return; }
     var delBtn = e.target.closest('[data-delete]');
     if(delBtn){ deleteJob(delBtn.getAttribute('data-delete')); return; }
+    var photoRm = e.target.closest('[data-photo-idx]');
+    if(photoRm){ editPendingPhotos.splice(parseInt(photoRm.getAttribute('data-photo-idx'),10), 1); renderEditPhotoPreview(); return; }
   });
   document.getElementById('modalOverlay').addEventListener('click', function(e){ if(e.target.id === 'modalOverlay') closeModal(); });
   document.addEventListener('keydown', function(e){

@@ -371,6 +371,20 @@
   .board-card-customer{font-family:var(--font-display); font-weight:600; font-size:17px; margin-bottom:4px;}
   .board-card-meta{font-size:13px; color:var(--ink-faint); margin-bottom:16px;}
   .status-light-row{display:flex; align-items:center; gap:10px; padding-top:14px; border-top:1px dashed var(--ticket-line);}
+  .card-photo-btn{
+    display:block; width:100%; border:none; padding:0; cursor:pointer; margin-bottom:12px;
+    border-radius:10px; overflow:hidden; position:relative; background:none;
+  }
+  .card-photo-btn img{width:100%; height:120px; object-fit:cover; display:block;}
+  .card-photo-badge{
+    position:absolute; bottom:6px; right:6px; background:rgba(33,29,26,.72); color:#fff;
+    font-size:11px; padding:3px 8px; border-radius:999px; font-family:var(--font-display); font-weight:600;
+  }
+  .lightbox-images{display:flex; flex-direction:column; gap:12px;}
+  .lightbox-images img{width:100%; border-radius:10px; display:block;}
+  .lightbox-download{
+    display:inline-block; margin-top:8px; color:var(--brass-dark); font-weight:600; font-size:13px; text-decoration:none;
+  }
   .status-light{
     width:14px; height:14px; border-radius:50%; flex:none;
     box-shadow:0 0 7px 2px currentColor;
@@ -442,6 +456,10 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modalOverlay" hidden>
+  <div class="modal" id="modalContent"></div>
+</div>
+
 <div class="toast" id="toast" hidden role="status"></div>
 <script type="module">
 // ===================================================================
@@ -497,6 +515,7 @@ async function initFirebase(){
 }
 
 function escapeHtml(str){ var d = document.createElement('div'); d.textContent = str == null ? '' : String(str); return d.innerHTML; }
+function escapeAttr(str){ return escapeHtml(str).replace(/"/g,'&quot;'); }
 function pad4(n){ return String(n).padStart(4,'0'); }
 function formatThaiDate(dateStr){
   var d = new Date(dateStr + 'T00:00:00');
@@ -518,8 +537,14 @@ function sortedJobs(list){
 }
 function boardCardHtml(j){
   var s = statusInfo(j.status);
+  var photos = j.finishedPhotos || [];
+  var photoBtn = photos.length ?
+    '<button type="button" class="card-photo-btn" data-photos-id="'+j.id+'"><img src="'+photos[0].dataUrl+'" alt="" />'+
+      (photos.length > 1 ? '<span class="card-photo-badge">📷 '+photos.length+'</span>' : '<span class="card-photo-badge">📷</span>')+
+    '</button>' : '';
   return '<div class="board-card">'+
     '<div class="board-card-head"><span class="ticket-no">#'+pad4(j.woNumber)+'</span></div>'+
+    photoBtn+
     '<div class="board-card-customer">'+escapeHtml(j.customerName)+'</div>'+
     '<div class="board-card-meta">'+escapeHtml(j.awardCode)+' · '+escapeHtml(j.size)+' · กำหนดส่ง '+formatThaiDate(j.dueDate)+'</div>'+
     '<div class="status-light-row">'+
@@ -528,6 +553,24 @@ function boardCardHtml(j){
     '</div>'+
   '</div>';
 }
+function openPhotoModal(id){
+  var job = currentJobsCache.filter(function(j){ return j.id === id; })[0];
+  if(!job || !job.finishedPhotos || !job.finishedPhotos.length) return;
+  var html = '<button class="modal-close" id="modalClose" type="button" aria-label="ปิด">×</button>'+
+    '<h2>รูปงานที่เสร็จแล้ว</h2>'+
+    '<p style="color:var(--ink-faint); font-size:13px; margin-top:-10px;">WO-'+pad4(job.woNumber)+' · '+escapeHtml(job.customerName)+'</p>'+
+    '<div class="lightbox-images">'+
+      job.finishedPhotos.map(function(f){
+        return '<div><img src="'+f.dataUrl+'" alt="'+escapeAttr(f.name)+'" />'+
+          '<a class="lightbox-download" href="'+f.dataUrl+'" download="'+escapeAttr(f.name)+'">⬇️ ดาวน์โหลดรูปนี้</a></div>';
+      }).join('')+
+    '</div>';
+  var modal = document.getElementById('modalContent');
+  modal.innerHTML = html;
+  document.getElementById('modalOverlay').hidden = false;
+  document.getElementById('modalClose').onclick = closeModal;
+}
+function closeModal(){ document.getElementById('modalOverlay').hidden = true; }
 function renderBoard(){
   var q = (document.getElementById('boardSearch').value||'').trim().toLowerCase();
   var list = currentJobsCache.filter(function(j){
@@ -574,6 +617,14 @@ function showToast(msg, type){
 async function init(){
   window.__appInitialized = true;
   document.getElementById('boardSearch').addEventListener('input', renderBoard);
+  document.body.addEventListener('click', function(e){
+    var photoBtn = e.target.closest('[data-photos-id]');
+    if(photoBtn){ openPhotoModal(photoBtn.getAttribute('data-photos-id')); return; }
+  });
+  document.getElementById('modalOverlay').addEventListener('click', function(e){ if(e.target.id === 'modalOverlay') closeModal(); });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && !document.getElementById('modalOverlay').hidden) closeModal();
+  });
   await initFirebase();
   if(firebaseReady) startListener();
 }
